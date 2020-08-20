@@ -1,0 +1,1114 @@
+<?php
+/**
+ * @file
+ *  Provides inline structured data using Microdata format.
+ */
+
+define('MICRODATA_DEFAULT_BUNDLE', '');
+
+/**
+ * Implements hook_hook_info().
+ */
+function microdata_hook_info() {
+  $hooks['microdata_suggestions'] = array(
+    'group' => 'microdata',
+  );
+
+  return $hooks;
+}
+
+/**
+ * Implements hook_help().
+ */
+function microdata_help($path, $arg) {
+  switch ($path) {
+    case 'admin/help#microdata':
+      $output = '';
+      $output .= '<h3>' . t('About') . '</h3>';
+      $output .= '<p>' . t('The Microdata module makes it easy to share content between sites and with services like Google\'s Recipe View.', array('@recipe' => 'http://www.google.com/landing/recipes/')) . '</p>';
+      $output .= '<h3>' . t('Microdata concepts') . '</h3>';
+      $output .= '<p>' . t('Microdata is a small set of attributes for HTML that can be used to add more information about the content. These attributes\' values often use a predefined set of terms. These groups of terms are called vocabularies and can be defined on the Web. For example, <a href="http://schema.org">schema.org</a> defines a vocabulary that will be used by search engines to present better search results.') . '</p>';
+      $output .= '<h4>' . t('itemtype') . '</h4>';
+      $output .= '<h4>' . t('itemprop') . '</h4>';
+      $output .= '<p>' . t('Short names (such as \'location\') can be used for properties defined by the content type\'s itemtype. Full URLs (such as \'http://schema.org/location\') should be used for properties that are defined by other vocabularies.') . '</p>';
+      return $output;
+  }
+}
+
+/*
+ * Implements hook_permission().
+ */
+function microdata_permission() {
+  return array(
+    'administer microdata' => array(
+      'title' => t('Administer microdata'),
+      'description' => t('Configure and setup microdata module.'),
+    ),
+  );
+}
+
+/**
+ * Implements hook_menu().
+ */
+function microdata_menu() {
+  // Set up default values for different kinds of callbacks.
+  $config_base = array(
+    'access arguments' => array('administer microdata'),
+    'file'             => 'microdata.admin.inc',
+  );
+  $autocomplete_base = array(
+    'access arguments' => array('access content'),
+    'type'             => MENU_CALLBACK,
+    'file'             => 'microdata.pages.inc',
+  );
+
+  // Admin pages.
+  $items['admin/config/services/microdata'] = array(
+    'title' => 'Microdata settings',
+    'description' => 'Configure how site content gets published in Microdata.',
+    'page callback' => 'microdata_mapping_overview',
+  ) + $config_base;
+  $items['admin/config/services/microdata/mappings'] = array(
+    'title' => 'Mappings',
+    'description' => 'Configure microdata mappings for bundles.',
+    'page callback' => 'microdata_mapping_overview',
+    'type' => MENU_DEFAULT_LOCAL_TASK,
+  ) + $config_base;
+  $items['admin/config/services/microdata/vocabularies'] = array(
+    'title' => 'Vocabularies',
+    'description' => 'Configure vocabularies to use in autocomplete dropdown.',
+    'page callback' => 'drupal_get_form',
+    'page arguments' => array('microdata_vocabulary_settings'),
+    'type' => MENU_LOCAL_TASK,
+  ) + $config_base;
+  // CTools modal.
+  $items['admin/config/services/microdata/mappings/manage/%/%/%ctools_js'] = array(
+      'title' => 'Edit microdata mapping',
+      'description' => 'Configure the microdata mapping for a bundle and its fields.',
+      'page callback' => 'microdata_ajax_bundle_mapping',
+      'page arguments' => array(6, 7, 8),
+  ) + $config_base;
+
+  // Autocomplete.
+  // I would prefer to use microdata/autocomplete, but for some reason it
+  // completely borks my server every time.
+  $items['microdata_autocomplete/itemtype'] = array(
+    'title' => 'Itemtype autocomplete',
+    'description' => 'Vocabulary autocomplete for itemtypes.',
+    'page callback' => 'microdata_autocomplete_itemtype',
+  ) + $autocomplete_base;
+  $items['microdata_autocomplete/itemprop/%'] = array(
+    'title' => 'Itemprop autocomplete',
+    'description' => 'Vocabulary autocomplete for itemprops.',
+    'page callback' => 'microdata_autocomplete_itemprop',
+    'page arguments' => array(2, 3),
+  ) + $autocomplete_base;
+  return $items;
+}
+
+/**
+ * Implements hook_theme().
+ */
+function microdata_theme() {
+  return array(
+    'microdata_mapping_admin' => array(
+      'variables' => array('bundle' => array(), 'itemtype' => array(), 'field_mappings' => array(), 'edit_path' => '',),
+    ),
+    'microdata_mapping_admin_overview_row' => array(
+      'variables' => array('field' => array(), 'field_name' => '',),
+    ),
+  );
+}
+
+/**
+ * Implements hook_theme_registry_alter().
+ */
+function microdata_theme_registry_alter(&$theme_registry) {
+
+  // Remove RDFa-related preprocess functions.
+  foreach (array('node', 'field', 'user_profile', 'username', 'comment', 'taxonomy_term', 'image') as $hook) {
+    // In some cases the preprocess functions aren't attached yet, see #1376920.
+    if (isset($theme_registry[$hook]) && isset($theme_registry[$hook]['preprocess functions'])) {
+      $key = array_search('rdf_preprocess_' . $hook, $theme_registry[$hook]['preprocess functions']);
+      if (!empty($key)) {
+        unset($theme_registry[$hook]['preprocess functions'][$key]);
+      }
+    }
+  }
+
+  // This is required to place the itemprop attribute in the image tag.
+  $theme_registry['image_formatter']['theme path'] = drupal_get_path('module', 'microdata');
+  $theme_registry['image_formatter']['function'] = 'theme_microdata_image_formatter';
+
+}
+
+/**
+ * Implements hook_field_info_alter().
+ */
+function microdata_field_info_alter(&$info) {
+  //$info['file']['microdata'] = TRUE;
+  $info['image']['microdata'] = TRUE;
+  $info['list_integer']['microdata'] = TRUE;
+  $info['list_float']['microdata'] = TRUE;
+  $info['list_text']['microdata'] = TRUE;
+  $info['list_boolean']['microdata'] = TRUE;
+  $info['number_integer']['microdata'] = TRUE;
+  $info['number_decimal']['microdata'] = TRUE;
+  $info['number_float']['microdata'] = TRUE;
+  $info['taxonomy_term_reference']['microdata'] = TRUE;
+  $info['text']['microdata'] = TRUE;
+  $info['text_long']['microdata'] = TRUE;
+  $info['text_with_summary']['microdata'] = TRUE;
+}
+
+/**
+ * Implements hook_microdata_vocabulary_info().
+ */
+function microdata_microdata_vocabulary_info() {
+  return array(
+    'schema_org' => array(
+      'label' => 'Schema.org',
+      'description' => t("Google, Bing, and Yahoo! supported terms for Rich Snippets, documented at !link.", array('!link' => l('Schema.org', 'http://schema.org'))),
+      'import_url' => 'http://schema.rdfs.org/all.json',
+    ),
+    'google_schema_org_extensions' => array(
+      'label' => 'Google Schema.org Extensions',
+      'description' => t("Google's custom extensions to Schema.org, such as SoftwareApplication. These are not well documented.", array('!link' => l('http://schema.org', 'Schema.org'))),
+      'import_url' => 'http://lin-clark.com/api/vocbaulary/google-schemaorg',
+    ),
+  );
+}
+
+/**
+ * Implements hook_modules_installed().
+ *
+ * Checks if the installed modules have any Microdata mapping definitions to
+ * declare and stores them in the microdata_mapping table and the rdf_mapping
+ * table if RDF is enabled.
+ *
+ * In contrast to the RDF Mapping API, default entity mappings are stored in the
+ * database. This is to allow for easier end-user override through the UI.
+ * However, this means that if the default mapping changes, module developers
+ * must use the CRUD API in hook_update to change all bundles for that entity.
+ */
+function microdata_modules_installed($modules) {
+  foreach ($modules as $module) {
+    $function = $module . '_microdata_mapping';
+    if (function_exists($function)) {
+
+      $mapping_info = $function();
+
+      // Pass through once to get all default bundle mappings.
+      foreach ($mapping_info as $key => $mapping) {
+        if ($mapping['bundle'] === MICRODATA_DEFAULT_BUNDLE) {
+          $type = $mapping['type'];
+          $suggested_mappings[$type] = $mapping;
+          unset($mappings[$key]);
+        }
+      }
+
+      // Save all of the remaining mappings, merging them with the default.
+      foreach ($mappings as $mapping) {
+        $type = $mapping['type'];
+        if (isset($suggested_mappings[$type])) {
+          $mapping = array_merge_recursive($mapping, $suggested_mappings[$type]);
+        }
+        microdata_save_mapping($entity_type, $bundle, $mapping);
+      }
+    }
+  }
+}
+
+/**
+ * Implements hook_entity_info_alter().
+ *
+ * Adds the Microdata mapping to each entity type/bundle pair.
+ */
+function microdata_entity_info_alter(&$entity_info) {
+  // Loop through each entity type and its bundles.
+  foreach ($entity_info as $entity_type => $entity_type_info) {
+    if (isset($entity_type_info['bundles'])) {
+      foreach ($entity_type_info['bundles'] as $bundle => $bundle_info) {
+        if ($mapping = _microdata_load_mapping($entity_type, $bundle)) {
+          $entity_info[$entity_type]['bundles'][$bundle]['microdata_mapping'] = $mapping;
+        }
+      }
+    }
+  }
+
+  return $entity_info;
+}
+
+/**
+ * Implements hook_entity_property_info_alter().
+ *
+ * In order to enable microdata on field properties that are defined in core,
+ * we use the alter hook. If Entity API and microdata are pulled into core in
+ * Drupal 8, this would not be necessary.
+ */
+function microdata_entity_property_info_alter(&$info) {
+  // Go through all the fields on all the bundles. If a bundle uses a
+  // text_formatted field, turn microdata on for the value property and the
+  // summary property if there is one.
+  foreach ($info as $entity_type => &$entity_info) {
+    if (isset($entity_info['bundles'])) {
+      foreach ($entity_info['bundles'] as $bundle_name => &$bundle_info) {
+        foreach ($bundle_info['properties'] as $field_name => &$field_info) {
+          if ($field_info['type'] == 'text_formatted') {
+            $field_info['property info']['value']['microdata'] = TRUE;
+            if (isset($field_info['property info']['summary'])) {
+              $field_info['property info']['summary']['microdata'] = TRUE;
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+/**
+ * Implements hook_entity_load().
+ */
+function microdata_entity_load($entities, $type) {
+  foreach ($entities as $entity) {
+    // Extracts the bundle of the entity being loaded.
+    list($id, $vid, $bundle) = entity_extract_ids($type, $entity);
+    $entity->microdata_mapping = microdata_load_mapping($type, $bundle);
+
+    // Process the mapping into an attributes array that is easier for the
+    // field formatter to use.
+    $entity->microdata = microdata_mapping_to_attributes($entity->microdata_mapping, $type, $entity);
+
+    // In order to prevent duplicate itemscope when using the entity in a field,
+    // we set microtdata_top_level_item to true here. It can be reset by the
+    // field formatter if needed.
+    $entity->microdata_top_level_item = TRUE;
+  }
+}
+
+/**
+ * Implements hook_form_FORM_ID_alter().
+ */
+function microdata_form_node_type_form_alter(&$form, &$form_state) {
+  module_load_include('inc', 'microdata', 'microdata.admin');
+
+  $entity_type = 'node';
+  $bundle_type = $form['#node_type']->type;
+  
+  $mapping = microdata_load_mapping($entity_type, $bundle_type);
+
+  // Create the vertical tab for microdata settings.
+  $form['microdata'] = array(
+    '#type'   => 'fieldset',
+    '#title'  => t('Microdata settings'),
+    '#collapsible' => TRUE,
+    '#group' => 'additional_settings',
+    '#tree' => TRUE,
+  );
+  $form['microdata'][$entity_type] = array(
+    '#type'   => 'container',
+  );
+
+  // Add the bundle mapping fields into the vertical tab.
+  $form['microdata'][$entity_type] = array_merge($form['microdata'][$entity_type], microdata_get_bundle_type_mapping_form($mapping, $entity_type, $bundle_type));
+
+  // Add the submit handler.
+  $form['#submit'] = array_merge($form['#submit'], array('microdata_bundle_type_mapping_form_submit'));
+}
+
+/**
+ * Implements hook_form_FORMID_alter().
+ *
+ * Adds microdata options to vocabulary form.
+ *
+ * @see taxonomy_form_vocabulary()
+ */
+function microdata_form_taxonomy_form_vocabulary_alter(&$form, $form_state, $edit = array()) {
+  module_load_include('inc', 'microdata', 'microdata.admin');
+
+  $form['microdata'] = array(
+    '#type'   => 'fieldset',
+    '#title'  => t('Term microdata settings'),
+    '#collapsible' => TRUE,
+    '#group' => 'additional_settings',
+    '#tree'   => TRUE,
+  );
+
+  $entity_type = 'taxonomy_term';
+  $bundle_type = $form['#vocabulary']->machine_name;
+  $mapping = microdata_load_mapping($entity_type, $bundle_type);
+  $form['microdata'][$entity_type] = array(
+    '#type'   => 'container',
+  );
+  // Add the bundle mapping fields into the vertical tab.
+  $form['microdata'][$entity_type] = array_merge($form['microdata'][$entity_type], microdata_get_bundle_type_mapping_form($mapping, $entity_type, $bundle_type));
+
+  // Add the submit handler.
+  $form['#submit'] = array_merge($form['#submit'], array('microdata_bundle_type_mapping_form_submit'));
+}
+
+/**
+ * Implements hook_form_FORM_ID_alter().
+ */
+function microdata_form_field_ui_field_edit_form_alter(&$form, &$form_state) {
+  module_load_include('inc', 'microdata', 'microdata.admin');
+
+  // @todo Fix this?
+  // If the form is set to rebuild, it skips form_execute_handlers at line 829
+  // in form.inc.
+  if (!empty($form_state['process_input'])) {
+    form_execute_handlers('submit', $form, $form_state);
+  }
+
+  $field_name = $form['#field']['field_name'];
+  $instance = $form['instance'];
+  $label = isset($instance['label']) ? $instance['label']['#default_value'] : $instance['field_name'];
+  $entity_type = $instance['entity_type']['#value'];
+  $entity_info = entity_get_info($entity_type);
+  $bundle = $instance['bundle']['#value'];
+  $bundle_label = $entity_info['bundles'][$bundle]['label'];
+  $mapping = microdata_load_mapping($entity_type, $bundle);
+  $module = $form['#field']['module'];
+
+  // Show the itemtype of the entity.
+  if (!empty($mapping['#itemtype'])) {
+    foreach ($mapping['#itemtype'] as $itemtype) {
+      $itemtypes[] = l($itemtype, $itemtype);
+    }
+    $itemtype_msg = t('@label uses the itemtype !itemtype.', array('@label' => $bundle_label, '!itemtype' => implode(', ', $itemtypes)));
+  }
+  else {
+    $edit_path = $entity_info['bundles'][$bundle]['admin']['real path'];
+    $itemtype_msg = t('No itemtype has been defined for %bundle. Define one on the !edit.', array('%bundle' => $bundle_label, '!edit' => l(check_plain($bundle_label) . ' edit page', $edit_path)));
+  }
+
+  // Create the fieldset tab.
+  $form['microdata'] = array(
+    '#type'   => 'fieldset',
+    '#title'  => t('@label Microdata Mapping', array('@label' => $label)),
+    '#description' => $itemtype_msg,
+    '#prefix' => '<div id="microdata-fieldset-wrapper">',
+    '#suffix' => '</div>',
+    '#tree'   => TRUE,
+  );
+  // Add the mapping form fields for the field. If 'Use suggested mapping' was
+  // clicked, the input values will be populated with the default mapping
+  // values.
+  $form['microdata']['fields'][$field_name]['#type'] = 'container';
+  $form['microdata']['fields'][$field_name] = array_merge($form['microdata']['fields'][$field_name], microdata_get_instance_mapping_form($field_name, $instance));
+  $form_state['input']['microdata']['fields'][$field_name]['field'] = array();
+
+  // Get the suggested mapping from $form_state if it is there.
+  if (empty($form_state['field_mapping'])) {
+    $field_mapping = $mapping[$field_name];
+  }
+  else {
+    // Merge in the original mapping, which has the value types for the field
+    // and properties.
+    $field_mapping = array_merge($mapping[$field_name], $form_state['field_mapping']);
+  }
+
+  // Add the suggested mapping for the field.
+  $main_field_input = &$form_state['input']['microdata']['fields'][$field_name]['field'];
+  $main_field_input['itemprop'] = $field_mapping['#itemprop'];
+  $main_field_input['item_fieldset']['itemtype'] = $field_mapping['#itemtype'];
+
+  // Add the suggested mappings for the properties.
+  foreach (_microdata_get_field_properties($entity_type, $bundle, $field_name) as $subfield_name => $subfield) {
+    $form_state['input']['microdata']['fields'][$field_name]['subfields'][$subfield_name] = array();
+    $subfield_mapping = $field_mapping[$subfield_name];
+    $subfield_input = &$form_state['input']['microdata']['fields'][$field_name]['subfields'][$subfield_name];
+    $subfield_input['itemprop'] = $subfield_mapping['#itemprop'];
+    $subfield_input['item_fieldset']['itemtype'] = $subfield_mapping['#itemtype'];
+  }
+
+  // Add the button for suggested mappings.
+  $suggestions = module_invoke($module, 'microdata_suggestions');
+  drupal_alter('microdata_suggestions', $suggestions);
+  if (!empty($suggestions)) {
+    $form_state['suggested_mappings'] = $suggestions['fields'][$form['#field']['type']];
+    $defined_mappings = array_keys($form_state['suggested_mappings']);
+
+    $form['suggested_mapping'] = array(
+      '#type' => 'radios',
+      '#title' => t('Suggested Microdata Mappings'),
+      '#options' => array_combine($defined_mappings, $defined_mappings),
+    );
+    $form['suggested_mapping']['get_suggested_mapping'] = array(
+      '#type'     => 'submit',
+      '#value'    => t('Use suggested mapping'),
+      '#executes_submit_callback' => TRUE,
+      '#submit'   => array('microdata_get_default_field_mapping'),
+      // See the examples in ajax_example.module for more details on the
+      // properties of #ajax.
+      '#ajax'     => array(
+        'callback'  => 'microdata_get_default_field_mapping_callback',
+        'wrapper'   => 'microdata-fieldset-wrapper',
+      ),
+      '#weight' => 10,
+    );
+  }
+
+  $form['submit']['#weight'] = 1;
+
+  // Add submit and validate handlers
+  $form['#validate'] = array_merge($form['#validate'], array('microdata_form_field_ui_field_edit_form_validate'));
+  $form['#submit'] = array_merge($form['#submit'], array('microdata_form_field_ui_field_edit_form_submit'));
+
+}
+
+function microdata_form_field_ui_field_edit_form_validate($form, &$form_state) {
+  // @todo What needs to be validated?
+}
+
+function microdata_bundle_type_mapping_form_submit($form, &$form_state) {
+  $values = $form_state['values']['microdata'];
+  unset($values['fields']);
+  foreach ($values as $entity_type => $fieldset) {
+    $bundle_type = $fieldset['bundle_type'];
+    // @todo Remove this type based checking.
+    if (empty($bundle_type)) {
+      switch ($entity_type) {
+        case 'node':
+          $bundle_type = $form_state['values']['type'];
+          break;
+        case 'taxonomy_vocabulary':
+          $bundle_type = 'taxonomy_vocabulary';
+          break;
+        case 'taxonomy_term':
+          $bundle_type = $form_state['values']['machine_name'];
+          break;
+      }
+    }
+
+    $mapping = microdata_load_mapping($entity_type, $bundle_type);
+
+    $mapping['#itemtype'] = drupal_explode_tags($fieldset['itemtype']);
+    $mapping['title']['#itemprop'] = drupal_explode_tags($fieldset['title_itemprop']);
+
+    if ($fieldset['is_item'] == TRUE) {
+      $mapping['#is_item'] = TRUE;
+      $mapping['#itemid_token'] = $fieldset['itemid_settings']['itemid_token'];
+    }
+    else {
+      $mapping['#is_item'] = FALSE;
+    }
+  
+    if ($entity_type == 'taxonomy_term') {
+      $mapping['description']['#itemprop'] = $fieldset['description_itemprop'];
+      $mapping['url']['#itemprop'] = $fieldset['url_itemprop'];
+    }
+  
+    microdata_save_mapping($entity_type, $bundle_type, $mapping);
+  }
+}
+
+function microdata_taxonomy_form_vocabulary_submit($form, &$form_state) {
+  $bundle_type = $form_state['values']['machine_name'];
+  foreach ($form_state['values']['microdata'] as $entity_type => $fieldset) {
+    $mapping = microdata_load_mapping($entity_type, $bundle_type);
+
+    $mapping['#itemtype'] = $fieldset['itemtype'];
+    $mapping['title']['#itemprop'] = $fieldset['title_itemprop'];
+
+    microdata_save_mapping($entity_type, $bundle_type, $mapping);
+  }
+}
+
+function microdata_form_field_ui_field_edit_form_submit($form, &$form_state) {
+  $entity_type = isset($form_state['#entity_type']) ?  $form_state['#entity_type'] : $form['instance']['entity_type']['#value'];
+  $bundle = isset($form_state['#bundle_type']) ?  $form_state['#bundle_type'] : $form['instance']['bundle']['#value'];
+  $values = $form_state['values'];
+
+  $mapping = microdata_load_mapping($entity_type, $bundle);
+  foreach ($values['microdata']['fields'] as $field_name => $field_values) {
+    $subfields = _microdata_get_field_properties($entity_type, $bundle, $field_name);
+    // If the field itself is microdata enabled, add the mapping for the field.
+    if (isset($field_values['field'])) {
+      $mapping[$field_name] = array(
+        '#itemprop' => drupal_explode_tags($field_values['field']['itemprop']),
+      );
+    
+      // If the field contains an item, save an itemtype scoped to this item.
+      if (isset($field_values['field']['item_fieldset']['itemtype'])) {
+        $mapping[$field_name]['#itemtype'] = drupal_explode_tags($field_values['field']['item_fieldset']['itemtype']);
+      }
+      else {
+        $mapping[$field_name]['#itemtype'] = array();
+      }
+    }
+  
+    // Add the mappings for field properties.
+    foreach ($subfields as $subfield_name => $subfield) {
+      $element = array(
+        '#itemprop' => drupal_explode_tags($field_values['subfields'][$subfield_name]['itemprop']),
+      );
+    
+      // If the subfield contains an item, save an itemtype scoped to this item.
+      // @todo Consider whether a subfield should ever be able to save an item.
+      if (isset($field_values[$subfield_name]['item_fieldset']['itemtype'])) {
+        $element['#itemtype'] = $field_values['subfields'][$subfield_name]['item_fieldset']['itemtype'];
+      }
+      else {
+        $element['#itemtype'] = '';
+      }
+      $mapping[$field_name][$subfield_name] = $element;
+    }
+  }
+
+  microdata_save_mapping($entity_type, $bundle, $mapping);
+}
+
+/**
+ * Submit handler for the "get-default-mappings" button.
+ *
+ * It just increments the max counter and causes a rebuild.
+ */
+function microdata_get_default_field_mapping($form, &$form_state) {
+  $selected = $form_state['values']['suggested_mapping'];
+  $form_state['field_mapping'] = $form_state['suggested_mappings'][$selected];
+
+  $form_state['rebuild'] = TRUE;
+}
+
+/**
+ * Callback for "get-default-mappings"  button.
+ *
+ * This simply selects and returns the fieldset with the mapping in it.
+ */
+function microdata_get_default_field_mapping_callback($form, $form_state) {
+  return $form['microdata'];
+}
+
+function microdata_field_attach_view_alter(&$output, $context) {
+  // Taxonomy Term Reference.
+  foreach (element_children($output) as $field_name) {
+    $element = &$output[$field_name];
+    if ($element['#field_type'] == 'taxonomy_term_reference') {
+      foreach ($element['#items'] as $delta => $item) {
+        // This function is invoked during entity preview when taxonomy term
+        // reference items might contain free-tagging terms that do not exist
+        // yet and thus have no $item['taxonomy_term'].
+        if (isset($item['taxonomy_term'])) {
+          $term = $item['taxonomy_term'];
+          if (!empty($term->microdata['title']['#attributes'])) {
+            $element[$delta]['#attributes'] = $term->microdata['url']['#attributes'];
+            // We have to process the text content's attributes and insert them
+            // with #prefix and #suffix. This outputs the <span> outside of the
+            // <a> tag, but the only way to nest it inside the <a> would be to
+            // change the #title value to include the <span>. This might affect
+            // other modules which are altering the taxonomy term reference.
+            $text_attributes = drupal_attributes($term->microdata['title']['#attributes']);
+            $element[$delta]['#prefix'] = "<span $text_attributes>";
+            $element[$delta]['#suffix'] = '</span>';
+          }
+        }
+      }
+    }
+  }
+}
+
+/**
+ * Implements MODULE_preprocess_HOOK().
+ *
+ * Adds Microdata markup to the field wrapper.
+ */
+function microdata_preprocess_field(&$variables) {
+  $element = $variables['element'];
+  $field_name = $element['#field_name'];
+  $mapping = microdata_load_mapping($element['#entity_type'], $element['#bundle']);
+  $field_mapping = $mapping[$field_name];
+  $microdata = $element['#object']->microdata;
+
+  foreach ($variables['items'] as $delta => &$item) {
+    if (isset($field_mapping['#value_type'])) {
+      // If this is a URL element, the field formatter must place the item's
+      // property attributes. Otherwise, the itemprop can be placed on the
+      // wrapping div with the item_attributes_array.
+      if ($field_mapping['#value_type'] !== 'url') {
+        $attributes = isset($variables['item_attributes_array'][$delta]) ? $variables['item_attributes_array'][$delta] : array();
+        $variables['item_attributes_array'][$delta] = array_merge($attributes, $microdata[$field_name]['#attributes']);
+      }
+    }
+
+    // Because core field formatters cannot be changed until D8, we use a
+    // theme hack to place the itemprop (and itemtype for taxonomy).
+    switch ($element['#formatter']) {
+      case 'image':
+        $item['#item']['attributes']['itemprop'] = $field_mapping['#itemprop'];
+        break;
+      case 'taxonomy_term_reference_link':
+        $term_microdata = $variables['items'][$delta]['#options']['entity']->microdata;
+        $attributes = isset($variables['item_attributes_array'][$delta]) ? $variables['item_attributes_array'][$delta] : array();
+          $variables['item_attributes_array'][$delta] = array_merge($attributes, $term_microdata['#attributes']);
+        break;
+      case 'text_default':
+        if ($field_mapping['#value_type'] != 'text') {
+          $attributes = isset($variables['item_attributes_array'][$delta]) ? $variables['item_attributes_array'][$delta] : array();
+          $variables['item_attributes_array'][$delta] = array_merge($attributes, $microdata[$field_name]['value']['#attributes']);
+        }
+        break;
+      case 'text_trimmed':
+      case 'text_summary_or_trimmed':
+        $attributes = isset($variables['item_attributes_array'][$delta]) ? $variables['item_attributes_array'][$delta] : array();
+        $variables['item_attributes_array'][$delta] = array_merge($attributes, $microdata[$field_name]['summary']['#attributes']);
+        break;
+    }
+  }
+}
+
+/**
+ * Implements MODULE_preprocess_HOOK().
+ *
+ * Adds Microdata markup to the node container.
+ */
+function microdata_preprocess_node(&$variables) {
+  $entity = $variables['elements']['#node'];
+
+  // If this node is a property of another item (for example, a node reference)
+  // then it is not a top-level item. The item attributes must be placed with
+  // the itemprop attribute, so we unset the item attributes and delegate their
+  // placement to the field formatter which wraps this node.
+  if (empty($entity->microdata_top_level_item)) {
+    unset($entity->microdata['#attributes']['itemscope']);
+    unset($entity->microdata['#attributes']['itemtype']);
+    unset($entity->microdata['#attributes']['itemid']);
+  }
+
+  $variables['attributes_array'] = array_merge($variables['attributes_array'], $entity->microdata['#attributes']);
+
+  // Add the title's itemprop. Because we can't be sure that the title will be
+  // nested within the node's HTML element, we use <meta> to place a copy of
+  // the value. Meta tags nested within the body tag are valid in HTML5.
+  if (!empty($entity->microdata['title']['#attributes'])) {
+    $entity->microdata['title']['#attributes']['content'] = $variables['title'];
+    $variables['content']['title_microdata'] = array(
+      '#type' => 'markup',
+      '#markup' => '<meta ' . drupal_attributes($entity->microdata['title']['#attributes']) . ' />',
+    );
+  }
+}
+
+/**
+ * Theme function to replace theme_image_formatter().
+ *
+ * We simply add one line to pass attributes along to theme_image(). This is
+ * also the method used in Rich Snippets module to rearrange the RDFa for the
+ * Google parser.
+ *
+ * Hopefully, this will be fixed in core, in which case this implementation
+ * could be removed.
+ */
+function theme_microdata_image_formatter(&$variables) {
+  $item = $variables['item'];
+  $image = array(
+    'path' => $item['uri'],
+    'alt' => $item['alt'],
+    // This is the single line we add. This will hopefully be fixed in core.
+    'attributes' => isset($item['attributes']) ? $item['attributes'] : array(),
+  );
+  // Do not output an empty 'title' attribute.
+  if (drupal_strlen($item['title']) > 0) {
+    $image['title'] = $item['title'];
+  }
+
+  if ($variables['image_style']) {
+    $image['style_name'] = $variables['image_style'];
+    $output = theme('image_style', $image);
+  }
+  else {
+    $output = theme('image', $image);
+  }
+
+  if ($variables['path']) {
+    $path = $variables['path']['path'];
+    $options = $variables['path']['options'];
+    // When displaying an image inside a link, the html option must be TRUE.
+    $options['html'] = TRUE;
+    $output = l($output, $path, $options);
+  }
+
+  return $output;
+}
+
+/**
+ * @defgroup microdata Microdata API
+ * @{
+ * 
+ * @endcode
+ */
+
+/**
+ * Returns the mapping for attributes of a given entity type/bundle pair.
+ *
+ * @param $type
+ *   An entity type.
+ * @param $bundle
+ *   A bundle name.
+ * @param $field_name
+ *   (optional) A field name.
+ *
+ * @return
+ *   The mapping corresponding to the requested entity type/bundle pair or an
+ *   empty array.
+ */
+function microdata_load_mapping($entity_type, $bundle_type) {
+  $mapping = array();
+  $field_info_fields = field_info_fields();
+
+  // Retrieves the bundle-specific mapping from the entity info.
+  $entity_info = entity_get_info($entity_type);
+  if (!empty($entity_info['bundles'][$bundle_type]['microdata_mapping'])) {
+    $mapping = $entity_info['bundles'][$bundle_type]['microdata_mapping'];
+  }
+
+  foreach ($mapping as $field_name => &$field_mapping) {
+    // If this is an attribute value (which start with #) or is a pseudo-field
+    // (like title), then continue.
+    if ($field_name[0] === '#' || empty($field_info_fields[$field_name]['type'])) {
+      continue;
+    }
+    $field_info = field_info_field_types($field_info_fields[$field_name]['type']);
+    if (!empty($field_info['microdata'])) {
+      $mapping[$field_name]['#value_type'] = microdata_get_value_type($field_info);
+      // If this is an entity in Drupal's data model, note it in the mapping.
+      if (in_array($field_info['property_type'], array_keys(entity_get_info()))) {
+        $mapping[$field_name]['#entity_type'] = $field_info['property_type'];
+      }
+    }
+    // @todo Consider unsetting the mapping if there is no microdata_type
+    // defined. In that case, maybe consider logging as well.
+    if (isset($field_mapping)) {
+      $properties = _microdata_get_field_properties($entity_type, $bundle_type, $field_name);
+      foreach ($field_mapping as $subfield_name => &$subfield_mapping) {
+        if (isset($properties[$subfield_name])) {
+          $type = $properties[$subfield_name]['microdata_type'];
+          $subfield_mapping['#value_type'] = $type;
+        }
+      }
+    }
+  }
+  $mapping['#value_type'] = 'item';
+
+  return $mapping;
+}
+
+/**
+ * Helper function to retrieve an RDF mapping from the database.
+ *
+ * @param $type
+ *   The entity type the mapping refers to.
+ * @param $bundle
+ *   The bundle the mapping refers to.
+ *
+ * @return
+ *   An RDF mapping structure or an empty array if no record was found.
+ */
+function _microdata_load_mapping($entity_type, $bundle_type, $field = NULL) {
+  $mapping = db_select('microdata_mapping')
+    ->fields(NULL, array('mapping'))
+    ->condition('type', $entity_type)
+    ->condition('bundle', $bundle_type)
+    ->execute()
+    ->fetchField();
+
+  if (!$mapping) {
+    $mapping = array();
+  }
+  else {
+    $mapping = unserialize($mapping);
+  }
+
+  $fields = field_info_instances($entity_type, $bundle_type);
+  _microdata_mapping_add_defaults($mapping, $entity_type, $bundle_type, $fields);
+
+  return $mapping;
+}
+
+/**
+ * Saves a Microdata mapping to the database. If RDF is enabled, it also saves
+ * an RDF mapping.
+ *
+ * Takes a mapping structure returned by hook_microdata_mapping()
+ * implementations and creates or updates a record mapping for each encountered
+ * entity type/bundle pair.
+ *
+ * @param $mapping
+ *   The RDF mapping to save, as an array.
+ *
+ * @return
+ *   Status flag indicating the outcome of the operation.
+ */
+function microdata_save_mapping($entity_type, $bundle, $mapping) {
+  $status = db_merge('microdata_mapping')
+    ->key(array(
+      'type' => $entity_type,
+      'bundle' => $bundle,
+    ))
+    ->fields(array(
+      'mapping' => serialize($mapping),
+    ))
+    ->execute();
+
+  if (module_exists('rdf')) {
+    // @ TODO If rdf is enabled, add to the rdf_mappings table as well.
+  }
+
+  entity_info_cache_clear();
+
+  return $status;
+}
+
+function microdata_get_field_mapping($entity_type, $bundle_type, $field_name) {
+  $mapping = microdata_load_mapping($entity_type, $bundle_type);
+  $field_mapping = isset($mapping[$field_name]) ? $mapping[$field_name] : array();
+  return $field_mapping;
+}
+
+/**
+ * Gets the vocabulary info as registered by hook_microdata_vocabulary_info.
+ *
+ * @return
+ *   A vocabulary info array.
+ *
+ * @see hook_microdata_vocabulary_info()
+ */
+function microdata_get_vocabulary_info() {
+  $vocabularies = array();
+  foreach (module_implements('microdata_vocabulary_info') as $module) {
+    $vocabularies = array_merge($vocabularies, call_user_func($module . '_microdata_vocabulary_info'));
+  }
+  return $vocabularies;
+}
+
+/**
+ * Get the list of vocabularies that are enabled on this site.
+ */
+function microdata_get_enabled_vocabularies() {
+  return variable_get('microdata_enabled_vocabularies');
+}
+
+/**
+ * @} End of "defgroup microdata".
+ */
+
+/**
+ * Determine whether a field formatter can output microdata.
+ * 
+ * Output may be allowed for fields or properties of field. Whether or not
+ * microdata is enabled for a field is defined in hook_field_info for fields
+ * and the Entity property callback (part of Entity API) for properties.
+ *
+ * @param $info
+ *   The array of field or property info.
+ *
+ * @return
+ *   Boolean. TRUE if this field or property has microdata integration, FALSE
+ *   otherwise.
+ */
+function microdata_enabled($info) {
+  if (isset($info['microdata']) && $info['microdata'] == TRUE) {
+    return TRUE;
+  }
+  return FALSE;
+}
+
+/**
+ * Translate Entity API property types into microdata property value types. The
+ * Entity API data types are documented at http://drupal.org/node/905580.
+ */
+function microdata_get_value_type($field) {
+  $property_type = !empty($field['property_type']) ? $field['property_type'] : $field['type'];
+  $microdata_value_types = &drupal_static(__FUNCTION__);
+
+  if (!isset($microdata_value_types)) {
+    // Set the basic Entity Property API data types.
+    $microdata_value_types = array(
+      'text' => 'text',
+      'integer' => 'text',
+      'decimal' => 'text',
+      'uri' => 'url',
+      'field_item_image' => 'url',
+      'date' => 'datetime',
+    );
+
+    // Add the entities.
+    foreach (array_keys(entity_get_info()) as $entity_type) {
+      $microdata_value_types[$entity_type] = 'struct';
+    }
+
+    // Allow modules to alter the value type. For example, some compound fields
+    // like addressfield would be assigned a value type of struct based on
+    // their Entity Property API data type, but should be handled as items
+    // instead.
+    drupal_alter('microdata_value_type', $microdata_value_types);
+  }
+
+  $type = microdata_enabled($field) && isset($microdata_value_types[$property_type]) ? $microdata_value_types[$property_type] : NULL;
+
+  return $type;
+}
+
+function microdata_mapping_to_attributes($mapping, $entity_type = NULL, $entity = NULL) {
+  if (is_string($mapping)) {
+    return $mapping;
+  }
+
+  // If the user has overriden the item handling, change the type to struct.
+  if (isset($mapping['#is_item']) && $mapping['#is_item'] === FALSE) {
+    $mapping['#value_type'] = 'struct';
+  }
+
+  $return['#attributes'] = array();
+
+  // If there is an itemprop mapping, add the attribute.
+  if (!empty($mapping['#itemprop'])) {
+    $return['#attributes']['itemprop'] = $mapping['#itemprop'];
+  }
+
+  // If the value for this property is an item, add itemscope.
+  if (isset($mapping['#value_type']) && $mapping['#value_type'] === 'item')  {
+    $return['#attributes']['itemscope'] = '';
+    // If an itemtype is defined, add that as well.
+    if (!empty($mapping['#itemtype'])) {
+      $return['#attributes']['itemtype'] = $mapping['#itemtype'];
+    }
+
+    // Get the appropriate token for the itemid.
+    if (isset($mapping['#itemid_token'])) {
+      // Because some token groups aren't named with the entity type, we have to
+      // change the group.
+      switch ($entity_type) {
+        case 'taxonomy_term':
+          $group = 'term';
+          break;
+        case 'taxonomy_vocabulary':
+          $group = 'vocabulary';
+          break;
+        default:
+          $group = $entity_type;
+      }
+      $return['#attributes']['itemid'] = token_replace($mapping['#itemid_token'], array($group => $entity));
+    }
+  }
+
+  foreach (array_keys($mapping) as $property) {
+    if ($property[0] != '#') {
+      $return[$property] = microdata_mapping_to_attributes($mapping[$property]);
+    }
+  }
+  // @todo Add a hook_microdata_attributes_attach to allow modules to insert
+  // or change attributes. For example, field collection might want to allow
+  // a field within the collection to be used as itemid.
+  return $return;
+}
+
+function _microdata_get_field_properties($entity_type, $bundle, $field_name) {
+  if (module_exists('entity')) {
+    $property_info = entity_get_property_info($entity_type);
+    if (isset($property_info['bundles'][$bundle]['properties'][$field_name]['property info'])) {
+      $properties = $property_info['bundles'][$bundle]['properties'][$field_name]['property info'];
+      foreach ($properties as $property_name => $property) {
+        if (empty($property['microdata'])) {
+          unset($properties[$property_name]);
+        }
+        else {
+          $properties[$property_name]['microdata_type'] = microdata_get_value_type($property);
+        }
+      }
+      return $properties;
+    }
+  }
+  return array();
+}
+
+function _microdata_get_form_elements($element, $field_name, $mapping, $label = NULL) {
+  switch ($element) {
+    case 'itemprop':
+      if (empty($label)) {
+        $label = t('Field property(s)');
+      }
+
+      $itemtypes = array();
+      if (!empty($mapping['#itemtype'])) {
+        foreach ($mapping['#itemtype'] as $itemtype) {
+          // Change '/' to ';' (as recommended at http://us.php.net/urlencode)
+          // so the itemtype isn't recognized as a path by the browser.
+          $itemtypes[] = str_replace('/', ';', $itemtype);
+        }
+      }
+      else {
+        $itemtypes[] = 'empty';
+      }
+      return array(
+        '#type' => 'textfield',
+        '#title' => $label,
+        '#default_value' => empty($mapping[$field_name]['#itemprop']) ? '' : implode(', ', $mapping[$field_name]['#itemprop']),
+        '#description' => t('Comma-separated list. Example: !properties',
+          array(
+            '!properties' => 'name, http://xmlns.com/foaf/0.1/name',
+          )
+        ),
+        '#autocomplete_path' => 'microdata_autocomplete/itemprop/' . urlencode(check_plain(implode(', ', $itemtypes))),
+        '#resizable' => FALSE,
+      );
+
+    case 'item_fieldset':
+      return array(
+        '#type' => 'fieldset',
+        '#title' => t('@label Item', array('@label' => $label)),
+      );
+
+    case 'itemtype':
+      if (empty($mapping[$field_name]['#entity_type'])) {
+        // The mapping passed in is either for the entity or for a field that
+        // has sub-properties.
+        if (empty($field_name)) {
+          $default_value = empty($mapping['#itemtype']) ? array() : implode(', ', $mapping['#itemtype']);
+        }
+        else {
+          $default_value = empty($mapping[$field_name]['#itemtype']) ? array() : implode(', ', $mapping[$field_name]['#itemtype']);
+        }
+        return array(
+          '#type' => 'textfield',
+          '#title' => 'Item Type',
+          '#default_value' => $default_value,
+          '#description' => t('For example, !types.',
+            array(
+              '!types' => 'http://schema.org/Person',
+            )
+          ),
+          '#autocomplete_path' => 'microdata_autocomplete/itemtype',
+          '#resizable' => FALSE,
+        );
+      }
+      else {
+        return array(
+          '#markup' => t("This field's value is a <em>{$mapping[$field_name]['#entity_type']}</em> entity. You will need to go to the entity's configuration page to edit its microdata mapping."),
+        );
+      }
+  }
+}
+
+function _microdata_mapping_add_defaults(&$mapping, $entity_type, $bundle_type, $fields) {
+  $defaults = array(
+    '#itemprop'   => array(),
+    '#itemtype'    => array(),
+  );
+
+  foreach ($fields as $field_name => $field) {
+    if (!isset($mapping[$field_name])) {
+      $mapping[$field_name] = array();
+    }
+    $mapping[$field_name] = array_merge($defaults, $mapping[$field_name]);
+
+    $subfields = _microdata_get_field_properties($entity_type, $bundle_type, $field_name);
+    foreach ($subfields as $subfield_name => &$subfield) {
+      if (!isset($mapping[$field_name][$subfield_name])) {
+        $mapping[$field_name][$subfield_name] = array();
+      }
+      $subfield_mapping = &$mapping[$field_name][$subfield_name];
+      $subfield_mapping = array_merge($defaults, $subfield_mapping);
+    }
+  }
+}

@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="VcsDirectoryMappings">
+    <mapping directory="$PROJECT_DIR$" vcs="Git" />
+    <mapping directory="$PROJECT_DIR$/colorbox_file" vcs="Git" />
+    <mapping directory="$PROJECT_DIR$/html5_tools" vcs="Git" />
+    <mapping directory="$PROJECT_DIR$/sites/all/modules" vcs="Git" />
+    <mapping directory="$PROJECT_DIR$/sites/all/modules/colorbox_file" vcs="Git" />
+    <mapping directory="$PROJECT_DIR$/tools.git" vcs="Git" />
+  </component>
+</project>

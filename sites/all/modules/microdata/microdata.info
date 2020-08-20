@@ -1,0 +1,14 @@
+name = Microdata
+description = Provides inline structured data using Microdata format, while leveraging the core RDF Mapping API so that it is easy to switch between Microdata and RDFa.
+package = Microdata
+core = 7.x
+dependencies[] = ctools
+dependencies[] = entity
+files[] = microdata.test
+
+; Information added by drupal.org packaging script on 2012-02-22
+version = "7.x-1.0-alpha4"
+core = "7.x"
+project = "microdata"
+datestamp = "1329918949"
+

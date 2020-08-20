@@ -1,0 +1,519 @@
+<?php
+
+/**
+ * @file
+ * Tests for microdata.module.
+ */
+
+/**
+ * Abstract class for testing Markup
+ */
+abstract class MicrodataMarkupTestCase extends DrupalWebTestCase {
+  var $entity_type = 'node';
+  var $bundle_type = 'article';
+  var $langcode = LANGUAGE_NONE;
+
+  function setUp() {
+    $modules = func_get_args();
+    if (isset($modules[0]) && is_array($modules[0])) {
+      $modules = $modules[0];
+    }
+    $modules[] = 'microdata';
+    parent::setUp($modules);
+
+    // Create a user to post the image.
+    $admin_user = $this->drupalCreateUser(array('edit own article content', 'revert revisions', 'administer content types'));
+    $this->drupalLogin($admin_user);
+
+    // Save the fields and instances.
+    foreach ($this->getFields() as $field) {
+      field_create_field($field);
+    }
+    foreach ($this->getInstances() as $instance) {
+      field_create_instance($instance);
+    }
+
+    // Save the mappings.
+    $mappings = $this->getMapping();
+    foreach ($mappings as $entity_type => $bundle_mappings) {
+      foreach ($bundle_mappings as $bundle_type => $mapping) {
+        microdata_save_mapping($entity_type, $bundle_type, $mapping);
+      }
+    }
+  }
+
+  /**
+   * Helper function.
+   */
+  protected function getFields() { }
+
+  /**
+   * Helper function.
+   */
+  protected function getInstances() { }
+
+  /**
+   * Helper function. 
+   */
+  protected function getMapping() { }
+
+  /**
+   * Create an article and see whether the core field attributes are properly
+   * placed.
+   */
+  protected function testAttributesInMarkup() { }
+}
+
+
+class MicrodataCoreFieldsTestCase extends MicrodataMarkupTestCase {
+  var $text_field_name = 'text_test';
+  var $image_field_name = 'field_image';
+  var $list_field_name = 'list_test';
+  var $keywords_field_name = 'field_keywords';
+  var $number_field_name = 'number_test';
+  var $tax_field_name = 'field_tags';
+
+  public static function getInfo() {
+    return array(
+      'name' => 'Microdata markup - core field',
+      'description' => 'Test core field markup generation.',
+      'group' => 'Microdata',
+    );
+  }
+
+  public function setUp() {
+    parent::setUp();
+  }
+
+  public function testAttributesInMarkup() {
+    // Set test values.
+    $title = $this->randomName();
+    $body = $this->randomName();
+    $text = 'foo';
+    $number = 23;
+    // Get the test image that simpletest provides.
+    $image = current($this->drupalGetTestFiles('image'));
+
+    // Create node and save, then edit node to upload files.
+    $node = $this->drupalCreateNode(array('type' => $this->bundle_type, 'promote' => 1));
+
+    // Add title value.
+    $edit["title"] = $title;
+    // Add body value.
+    $edit["body[und][0][value]"] = $body;
+    // Add text field value.
+    $edit["{$this->text_field_name}[und][0][value]"] = $text;
+    // Add image field value.
+    $edit['files[' . $this->image_field_name . '_' . $this->langcode . '_0]'] = drupal_realpath($image->uri);
+    // Add number field values.
+    $edit["{$this->list_field_name}[und][2]"] = TRUE;
+    $edit["{$this->list_field_name}[und][3]"] = TRUE;
+    // Add number field value.
+    $edit["{$this->number_field_name}[und][0][value]"] = $number;
+    // Add tags field value.
+    $edit["{$this->tax_field_name}[und]"] = 'funny, monkey';
+    // Add keywords.
+    $edit["{$this->keywords_field_name}[und]"] = 'foo, bar';
+    $this->drupalPost('node/' . $node->nid . '/edit', $edit, t('Save'));
+
+    $this->drupalGet('node/' . $node->nid);
+
+    // Test title.
+    $title_test = $this->xpath("//div[@itemscope='']//meta[@itemprop='name' and @content='$title']");
+    $this->assertTrue(!empty($title_test), t('Itemprop is placed on title.'));
+
+    // Test body.
+    $body_test = $this->xpath("//div[@itemscope='']//div[@itemprop='articleBody']//p[.='$body']");
+    $this->assertTrue(!empty($body_test), t('Itemprop is placed on body field (text_formatted value).'));
+
+    // Test text field.
+    $text_test = $this->xpath("//div[@itemscope='']//div[@itemprop='genre' and .='$text']");
+    $this->assertTrue(!empty($text_test), t('Itemprop is placed on text field.'));
+
+    // Test image field.
+    $image_test = $this->xpath("//div[@itemscope='']//img[@itemprop='image']");
+    $this->assertTrue(!empty($image_test), t('Itemprop is placed on image field.'));
+
+    // Test list field.
+    $list_test = $this->xpath("//div[@itemscope='']//*[@itemprop='ingredient' and .='Two' or .='Three']");
+    $this->assertTrue(count($list_test) == 2, t('Itemprops are placed on list.'));
+
+    // Test number field.
+    $number_test = $this->xpath("//div[@itemscope='']//*[@itemprop='age' and .='$number']");
+    $this->assertTrue(!empty($number_test), t('Itemprop is placed on number field.'));
+
+    // The taxonomy tags multiple values are wrapped with itemscope and the url
+    // and term name are mapped.
+    $tax_test = $this->xpath("//div[@itemscope='']//li[@itemprop='about' and @itemtype='http://schema.org/Thing' and @itemscope='']//span[@itemprop='name']//a[@itemprop='url' and .='funny' or .='monkey']");
+    $this->assertTrue(count($tax_test) == 2, t('Itemprops and itemtype are placed on taxonomy tags.'));
+
+    // The keywords taxonomy term entity is not handled as an item.
+    $keywords_test = $this->xpath("//div[@itemscope='']//li[@itemprop='keywords']");
+    $this->assertTrue(count($keywords_test) == 2, t('Itemprop placed on keywords.'));
+
+    // Test teaser.
+    $this->drupalGet('node');
+
+    // The body summary is mapped to property 'description'.
+    $summary_test = $this->xpath("//div[@itemscope='']//div[@itemprop='description']//p[.='$body']");
+    $this->assertTrue(!empty($summary_test), t('Itemprop is placed on body summary.'));
+
+  }
+
+  protected function getFields() {
+    $vocabulary = (object) array(
+      'name' => st('Keywords'),
+      'description' => 'description',
+      'machine_name' => 'keywords',
+    );
+    taxonomy_vocabulary_save($vocabulary);
+    $fields = array(
+      // Text field.
+      array(
+        'field_name' => $this->text_field_name,
+        'type' => 'text',
+      ),
+      // List field.
+      array(
+        'field_name' => $this->list_field_name,
+        'type' => 'list_text',
+        'cardinality' => 3,
+        'settings' => array(
+          'allowed_values' => array(1 => 'One', 2 => 'Two', 3 => 'Three'),
+        ),
+      ),
+      // Number field.
+      array(
+        'field_name' => $this->number_field_name,
+        'type' => 'number_integer',
+      ),
+      // Second taxonomy field.
+      array(
+        'field_name' => $this->keywords_field_name,
+        'type' => 'taxonomy_term_reference',
+        // Set cardinality to unlimited for tagging.
+        'cardinality' => FIELD_CARDINALITY_UNLIMITED,
+        'settings' => array(
+          'allowed_values' => array(
+            array(
+              'vocabulary' => $vocabulary->machine_name,
+              'parent' => 0,
+            ),
+          ),
+        ),
+      ),
+    );
+
+    return $fields;
+  }
+
+  protected function getInstances() {
+    $instances = array(
+      // Text instance.
+      array(
+        'field_name' => $this->text_field_name,
+        'entity_type' => 'node',
+        'bundle' => $this->bundle_type,
+        'display' => array(
+          'teaser' => array(
+            'type' => 'text_default',
+          ),
+        ),
+      ),
+      // List instance.
+      array(
+        'field_name' => $this->list_field_name,
+        'entity_type' => 'node',
+        'bundle' => $this->bundle_type,
+        'widget' => array(
+          'type' => 'options_buttons',
+        ),
+      ),
+      // Number instance.
+      array(
+        'field_name' => $this->number_field_name,
+        'entity_type' => 'node',
+        'bundle' => $this->bundle_type,
+      ),
+      // Second taxonomy instance.
+      array(
+        'field_name' => $this->keywords_field_name,
+        'entity_type' => 'node',
+        'label' => 'Keywords',
+        'bundle' => $this->bundle_type,
+        'widget' => array(
+          'type' => 'taxonomy_autocomplete',
+        ),
+        'display' => array(
+          'default' => array(
+            'type' => 'taxonomy_term_reference_link',
+          ),
+        ),
+      ),
+    );
+
+    return $instances;
+  }
+
+  protected function getMapping() {
+    $mapping = array(
+      $this->entity_type => array(
+        $this->bundle_type => array(
+          '#itemtype' => 'http://schema.org/BlogPosting',
+          // Title.
+          'title' => array(
+            '#itemprop' => array('name'),
+          ),
+          'body' => array(
+            'value' => array(
+              '#itemprop' => array('articleBody'),
+            ),
+            'summary' => array(
+              '#itemprop' => array('description'),
+            ),
+          ),
+          // Image field.
+          $this->image_field_name => array(
+            '#itemprop' => array('image'),
+          ),
+          // Taxonomy Term Reference field.
+          $this->tax_field_name => array(
+            '#itemprop' => array('about'),
+          ),
+          // Text field.
+          $this->text_field_name => array(
+            '#itemprop' => array('genre'),
+          ),
+          // List field.
+          $this->list_field_name => array(
+            '#itemprop' => array('ingredient'),
+          ),
+          // Number field.
+          $this->number_field_name => array(
+            '#itemprop' => array('age'),
+          ),
+          $this->keywords_field_name => array(
+            '#itemprop' => array('keywords'),
+          ),
+        ),
+      ),
+      'taxonomy_term' => array(
+        'tags' => array(
+          '#itemtype' => 'http://schema.org/Thing',
+          // Title.
+          'title' => array(
+            '#itemprop' => array('name'),
+          ),
+          'url' => array(
+            '#itemprop' => array('url'),
+          ),
+        ),
+        'keywords' => array(
+          '#is_item' => FALSE,
+        ),
+      ),
+    );
+    return $mapping;
+  }
+}
+
+class MicrodataReferenceFieldsTestCase extends MicrodataMarkupTestCase {
+  var $fieldcollection_field_name = 'fieldcollection_test';
+  var $fieldcollection_subfield_name = 'fieldcollection_text';
+
+  public static function getInfo() {
+    return array(
+      'name' => 'Microdata markup - reference field',
+      'description' => 'Test reference field markup generation.',
+      'group' => 'Microdata',
+    );
+  }
+
+  public function setUp() {
+    parent::setUp(array('field_collection'));
+  }
+
+  public function testAttributesInMarkup() {
+    $edit = array();
+
+    // Create node and save, then edit node to upload files.
+    $node = $this->drupalCreateNode(array('type' => $this->bundle_type, 'promote' => 1));
+
+    $path = 'field-collection/fieldcollection-test/add/node/' . $node->nid;
+    $this->drupalGet($path);
+
+    $edit['fieldcollection_text[und][0][value]'] = $this->randomName();
+    $this->drupalPost($path, $edit, t('Save'));
+
+    // Go back to main node.
+    $this->drupalGet('node/' . $node->nid);
+
+    // The field collection is mapped to nutrition, with a subfield of calories
+    // and has itemscope on field wrapper, not on div.
+    $fieldcollection_test = $this->xpath("//div[@itemscope='' and @itemprop='nutrition' and @itemtype='http://schema.org/NutritionInformation']//div[not(@itemscope='')]//div[@itemprop='calories']");
+    $this->assertTrue(!empty($fieldcollection_test), t('Itemprop and itemscope are both placed on field wrapper for field collection.'));
+  }
+
+  protected function getFields() {
+    $fields = array(
+      array(
+        'field_name' => $this->fieldcollection_field_name,
+        'type' => 'field_collection',
+      ),
+      array(
+        'field_name' => $this->fieldcollection_subfield_name,
+        'type' => 'text',
+        'cardinality' => 1,
+        'translatable' => FALSE,
+      ),
+    );
+
+    return $fields;
+  }
+
+  protected function getInstances() {
+    $instances = array(
+      array(
+        'field_name' => $this->fieldcollection_field_name,
+        'entity_type' => 'node',
+        'bundle' => $this->bundle_type,
+        'widget' => array(
+          'type' => 'hidden',
+          'label' => 'Test',
+          'settings' => array(),
+        ),
+      ),
+      array(
+        'entity_type' => 'field_collection_item',
+        'field_name' => 'fieldcollection_text',
+        'bundle' => $this->fieldcollection_field_name,
+        'label' => 'Test text field',
+        'widget' => array(
+          'type' => 'text_textfield',
+        ),
+      ),
+    );
+
+    return $instances;
+  }
+
+  protected function getMapping() {
+    $mapping = array(
+      $this->entity_type => array(
+        $this->bundle_type => array(
+          // Field collection field.
+          $this->fieldcollection_field_name => array(
+            '#itemprop' => 'nutrition',
+          ),
+        ),
+      ),
+      'field_collection_item' => array(
+        'fieldcollection_test' => array(
+          '#itemtype' => 'http://schema.org/NutritionInformation',
+          'fieldcollection_text' => array(
+            '#itemprop' => array('calories'),
+          ),
+        ),
+      ),
+    );
+
+    return $mapping;
+  }
+}
+
+class MicrodataCompoundFieldsTestCase extends MicrodataMarkupTestCase {
+  var $addressfield_field_name = 'addressfield_test';
+  var $subfield_name = 'locality';
+
+  public static function getInfo() {
+    return array(
+      'name' => 'Microdata markup - compound field',
+      'description' => 'Test reference field markup generation.',
+      'group' => 'Microdata',
+    );
+  }
+
+  public function setUp() {
+    parent::setUp(array('addressfield'));
+    variable_set('site_default_country', 'US');
+  }
+
+  public function testAttributesInMarkup() {
+    $edit = array();
+
+    // Create node and save, then edit node to upload files.
+    $node = $this->drupalCreateNode(array('type' => $this->bundle_type, 'promote' => 1));
+    $node_load = node_load($node->nid);
+    $node_load->{$this->addressfield_field_name}['und'][0]['country'] = 'US';
+    $node_load->{$this->addressfield_field_name}['und'][0]['thoroughfare'] = $this->randomName();
+    $node_load->{$this->addressfield_field_name}['und'][0]['locality'] = 'Pittsburgh';
+    node_save($node_load);
+
+    // Go back to main node.
+    //$this->drupalGet('node/' . $node->nid);
+    $this->drupalGet('node/' . $node->nid);
+
+    // The field collection is mapped to nutrition, with a subfield of calories
+    // and has itemscope on field wrapper, not on div.
+    $result = $this->xpath("//div[@itemscope='' and @itemprop='address' and @itemtype='http://schema.org/PostalAddress']//div[not(@itemscope='')]//span[@itemprop='addressLocality']");
+    $this->assertTrue(!empty($result), t('Compound field AddressField has valid markup.'));
+  }
+
+  protected function getFields() {
+    $fields = array(
+      array(
+        'field_name' => $this->addressfield_field_name,
+        'type' => 'addressfield',
+        'cardinality' => 1,
+        'entity_types' => array('node'),
+        'translatable' => FALSE,
+      ),
+    );
+
+    return $fields;
+  }
+
+  protected function getInstances() {
+    $instances = array(
+      array(
+        'field_name' => $this->addressfield_field_name,
+        'entity_type' => 'node',
+        'bundle' => $this->bundle_type,
+        'widget' => array(
+          'type' => 'addressfield_standard',
+          'weight' => -10,
+          'settings' => array(
+            'format_handlers' => array('address', 'name-oneline'),
+          ),
+        ),
+        'display' => array(
+          'default' => array(
+            'label' => 'hidden',
+            'type' => 'addressfield_default',
+            'weight' => -10,
+          ),
+        ),
+      ),
+    );
+
+    return $instances;
+  }
+
+  protected function getMapping() {
+    $mapping = array(
+      $this->entity_type => array(
+        $this->bundle_type => array(
+          $this->addressfield_field_name => array(
+            '#itemtype' => 'http://schema.org/PostalAddress',
+            '#itemprop' => array('address'),
+            $this->subfield_name => array(
+              '#itemprop' => array('addressLocality'),
+            ),
+          ),
+        ),
+      ),
+    );
+
+    return $mapping;
+  }
+}

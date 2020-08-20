@@ -1,0 +1,95 @@
+<?php
+/**
+ * Implements hook_field_formatter_info().
+ */
+function d7dev_field_formatter_info()
+{
+  return array(
+// The 'Default' formatter is different for integer fields on the one hand,
+// and for decimal and float fields on the other hand, in order to be able
+// to use different default values for the settings.
+    'd7dev_integer_duration' => array(
+      'label' => t('Duration'),
+      'field types' => array('number_integer'),
+    ));
+}
+
+//simple helper function to get gcd of minutes
+function gcd($a, $b)
+{
+//  $b = ($a == 0) ? 0 : $b;
+  return ($a % $b) ? gcd($b, abs($a - $b)) : $b;
+}
+
+/**
+ * Implements hook_field_formatter_view().
+ */
+function d7dev_field_formatter_view($entity_type, $entity, $field, $instance, $langcode, $items, $display)
+{
+  $element = array();
+  $settings = $display['settings'];
+
+  switch ($display['type']) {
+
+    case 'd7dev_integer_duration':
+      foreach ($items as $delta => $item) {
+        //some simple math to convert the duration minutes to hours and the remainder as minutes
+        $hours = floor($item['value'] / 60); //divide by minutes in 1 hour and get floor
+        $minutes = $item['value'] % 60; //use the modulus to get the remainder of minutes
+        //get greatest common denominator of minutes to convert to fraction of hours
+        if ($minutes > 0) {
+          $minutes_gcd = gcd($minutes, 60);
+          //&frasl; is the html entity for the fraction separator, and we use the sup and sub html element to give the appearance of a fraction
+          $minutes_fraction = '<sup>' . $minutes / $minutes_gcd . '</sup>&frasl;<sub>' . 60 / $minutes_gcd . '</sub>';
+          $markup = $hours > 0 ? $hours . ' and ' . $minutes_fraction . ' hours' : $minutes_fraction . ' hours';
+        } else $markup = $hours . ' hours';
+
+        //finally, return our formatted value as the markup for this field formatter
+        $element[$delta] = array('#markup' => $markup);
+      }
+      break;
+  }
+
+  return $element;
+}
+
+/**
+ * Implements hook_image_default_styles().
+ */
+function d7dev_image_default_styles()
+{
+  $styles = array();
+  $styles['small'] = array(
+    'effects' => array(
+      array(
+        'name' => 'image_scale',
+        'data' => array(
+          'width' => 160,
+          'height' => 120,
+          'upscale' => 0,
+        ),
+        'weight' => 0,
+      ),
+
+    ),
+  );
+  return $styles;
+}
+
+///**
+// * Implements hook_form_FORM_ID_alter().
+// */
+//function d7dev_form_webform_client_form_55_alter(&$form,
+//                                                 &$form_state, $form_id)
+//{
+//  //loop through all of the webform fields
+//  foreach ($form['submitted'] as &$field) {
+//    //if the webform_component type is set and is email,
+//    //then this is a field we want to change
+//    if (isset($field['#webform_component']['type'])
+//      && $field['#webform_component']['type'] == 'email') {
+//      $field['#type'] = 'emailfield'; //set the field type to emailfield
+//    }
+//  }
+////  dd($form, 'd7dev_form_webform_client_form_55_alter');
+//}
