@@ -1,0 +1,5 @@
+name = Webform Management
+description = Nothing
+core = 7.x
+package = Webform
+files[] = webform_management.module

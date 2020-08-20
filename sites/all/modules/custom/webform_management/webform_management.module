@@ -1,0 +1,283 @@
+<?php
+
+/**
+ * Implementation of hook_menu().
+ */
+function webform_management_menu()
+{
+  $items = array();
+  $items['webform_list'] = array(
+    'title' => t('Webform List'),
+    'page callback' => 'webform_list',
+    'access callback' => TRUE,
+  );
+  $items['webform_list/update/%'] = array(
+    'title' => t('Webform List'),
+    'page callback' => 'update',
+    'page arguments' => array(2),
+    'access callback' => TRUE,
+  );
+  $items['webform_list/delete/%'] = array(
+    'title' => t('Webform List'),
+    'page callback' => 'delete',
+    'page arguments' => array(2),
+    'access callback' => TRUE,
+  );
+  $items['webform_list/create_new'] = array(
+    'title' => t('Webform List'),
+    'page callback' => 'drupal_get_form',
+    'page arguments' => array('create_new'), //put the name of the form here
+    'access callback' => TRUE
+  );
+  $items['webform_list/component/%'] = array(
+    'title' => t('Webform List'),
+    'page callback' => 'drupal_get_form',
+    'page arguments' => array('webform_component', 2),
+    'access callback' => TRUE,
+  );
+  $items['webform_list/component/%/delete/%'] = array(
+    'title' => t('Webform List'),
+    'page callback' => 'delete_component',
+    'page arguments' => array(2, 4),
+    'access callback' => TRUE,
+  );
+  return $items;
+}
+
+function webform_list()
+{
+  $header = array('Title', 'Update', 'Delete');
+  $rows = array();
+  $form = array();
+  $query = db_select('node', 'n')
+    ->fields('n', array('title', 'nid'))
+    ->condition('type', 'webform')
+    ->execute();
+
+  foreach ($query as $record) {
+//    dpm($record);
+    $rows[] = array(
+      $record->title,
+      "<a href='webform_list/update/{$record->nid}'>update</a>",
+      "<a href='webform_list/delete/{$record->nid}'>delete</a>",
+    );
+  }
+
+  //add link
+  $form['create_new'] = array(
+    '#markup' => l('Create New', 'webform_list/create_new')
+  );
+
+  $table = theme('table', array('header' => $header, 'rows' => $rows));
+  $form[] = array(
+    '#markup' => $table
+  );
+  return $form;
+}
+
+function create_new($form, &$form_state)
+{
+//  drupal_goto("node/add/webform");
+  $form['title'] = array(
+    '#type' => 'textfield',
+    '#title' => t('Title'),
+    '#required' => TRUE,
+  );
+  $form['body'] = array(
+    '#type' => 'textarea',
+    '#title' => t('Body')
+  );
+
+  $form['save_new'] = array(
+    '#type' => 'submit',
+    '#value' => t('Save'),
+    '#submit' => array('save_new'),
+  );
+
+  return $form;
+
+}
+
+function save_new($form, $form_state)
+{
+  $nid = db_insert('node')
+    ->fields(array(
+      'title' => $form_state['values']['title'],
+      'uid' => 1,
+//    'vid'=>  ,
+      'type' => 'webform',
+    ))
+    ->execute();
+
+  drupal_goto("webform_list/component/" . $nid);
+  return $form;
+}
+
+function update($id)
+{
+  drupal_goto("webform_list/component/" . $id);
+}
+
+function delete($id)
+{
+  $num_deleted = db_delete('node')
+    ->condition('nid', $id)
+    ->execute();
+  drupal_set_message('Deleted.');
+  drupal_goto("webform_list");
+}
+
+
+function webform_component($form, &$form_state, $id)
+{
+  $form_state['id'] = $id;
+  $list = module_invoke('webform', 'webform_component_info');
+//  dpm($list);
+  $header = array('Label', 'Type', 'Value', 'Mandatory', 'Operations');
+  $rows = array();
+  $query = db_select('webform_component', 'w')
+    ->fields('w', array('name', 'type', 'value', 'mandatory', 'cid'))
+    ->condition('nid', $id)
+    ->execute();
+  $form_state['cid'] = 0;
+  foreach ($query as $record) {
+//    dpm($record);
+//    $form['mandatory_cb'] = array(
+//      '#type' => 'checkbox',
+//      '#default_value' => $record->mandatory
+//    );
+    $rows[] = array(
+      $record->name,
+      $record->type,
+      $record->value,
+      $record->mandatory,
+      "<a href='{$id}/delete/{$record->cid}'>delete</a>",
+    );
+    $form_state['cid']++;
+  }
+  $form['label'] = array(
+    '#type' => 'textfield',
+    '#size' => 25,
+  );
+  $form['type'] = array(
+    '#type' => 'select',
+    '#options' => array(
+      //value == key
+      drupal_map_assoc(array_keys($list))
+    ),
+    '#default_value' => 'date',
+  );
+  $form['mandatory'] = array(
+    '#type' => 'checkbox'
+  );
+
+  $form['add_component'] = array(
+    '#type' => 'submit',
+    '#value' => t('Add'),
+    '#submit' => array('add_component'),
+  );
+//  $rows[] = array(
+//    drupal_render($form['label']),
+//    drupal_render($form['type']),
+//    null,
+//    drupal_render($form['mandatory']),
+//    drupal_render($form['add_component']),
+//  );
+  $table = theme('table', array('header' => $header, 'rows' => $rows));
+  $form[] = array(
+    '#markup' => $table
+  );
+//  dpm($form_state);
+  return $form;
+}
+
+function add_component($form, $form_state)
+{
+//  dpm($form_state);
+  db_insert('webform_component')
+    ->fields(array(
+      'cid' => $form_state['cid'],
+      'nid' => $form_state['id'],
+      'name' => $form_state['values']['label'],
+      'type' => $form_state['values']['type'],
+      'value' => '',
+      'extra' => '',
+      'mandatory' => $form_state['values']['mandatory'],
+    ))
+    ->execute();
+  drupal_goto("webform_list/component/" . $form_state['id']);
+}
+
+function delete_component($nid, $cid)
+{
+//dpm($nid,$cid);
+  $num_deleted = db_delete('webform_component');
+
+  $db_and = db_and();
+  $db_and->condition('nid', $nid);
+  $db_and->condition('cid', $cid);
+  $num_deleted->condition($db_and)->execute();
+  drupal_set_message('Deleted.');
+  drupal_goto("webform_list/component/".$nid);
+}
+
+/**
+ * Implements hook_block_info().
+ *
+ * Define all blocks provided by the module.
+ */
+function webform_management_block_info()
+{
+  //Define an associative array for each block, in this case just one:
+  $blocks['webform_list'] = array(
+    // info: (required) The name of the block.
+    'info' => t('Webform List'),
+// cache: (optional) Same for every user on every page where it is visible.
+    'cache' => DRUPAL_CACHE_GLOBAL,
+  );
+  return $blocks;
+}
+
+/**
+ * Implements hook_block_view().
+ *
+ * Return a rendered or renderable view of a block.
+ */
+function webform_management_block_view($delta = '')
+{
+//  $block = array();
+  //$delta: what block to render as defined in hook_block_info.
+  switch ($delta) {
+    case 'webform_list':
+      // The default localized title of the block, in this case
+      //NULL
+      $block['subject'] = NULL;
+      // The content of the block's body.
+      $block['content'] = webform_management_contents($delta);
+      break;
+  }
+  return $block;
+}
+
+/**
+ * Function that generates the content for webform_management blocks.
+ */
+function webform_management_contents($delta = '')
+{
+  //additional blocks may be added, so base this on the block $delta
+  switch ($delta) {
+    case 'webform_list':
+      //just a simple reander array with a link
+      $add_recipe_link = array(
+        '#theme' => 'link',
+        '#text' => t('Webform List'),
+        '#path' => 'webform_list',
+        '#options' => array(
+          'attributes' => array(),
+          //REQUIRED:
+          'html' => FALSE,
+        ),
+      );
+      return $add_recipe_link;
+  }
+}
